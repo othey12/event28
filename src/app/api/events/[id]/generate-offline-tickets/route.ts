@@ -194,7 +194,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     console.log('📄 Generating PDF...')
 
-    // Generate PDF with grid layout
+    // Generate PDF with grid layout - FIXED: Don't specify font to avoid font file issues
     const doc = new PDFDocument({ 
       size: [PAGE_W, PAGE_H], 
       margin: 0,
