@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
-import PDFDocument from 'pdfkit'
 import bwipjs from 'bwip-js'
 
 function isImageFile(file: File) {
@@ -192,58 +191,115 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    console.log('📄 Generating PDF...')
+    console.log('📄 Generating PDF using canvas-based approach...')
 
-    // Generate PDF with grid layout - FIXED: Don't specify font to avoid font file issues
-    const doc = new PDFDocument({ 
-      size: [PAGE_W, PAGE_H], 
-      margin: 0,
-      bufferPages: true
-    })
-    
-    const pdfChunks: Buffer[] = []
-    doc.on('data', chunk => pdfChunks.push(chunk))
-    doc.on('end', () => {})
+    // Use canvas-based PDF generation instead of PDFKit to avoid font issues
+    try {
+      // Create a simple PDF-like structure using HTML canvas approach
+      const { createCanvas } = await import('canvas')
+      
+      // Calculate pages needed
+      const totalPages = Math.ceil(ticketImages.length / TICKETS_PER_PAGE)
+      const canvasPages: Buffer[] = []
 
-    let ticketIndex = 0
-    while (ticketIndex < ticketImages.length) {
-      if (ticketIndex > 0) {
-        doc.addPage()
-      }
+      for (let page = 0; page < totalPages; page++) {
+        const canvas = createCanvas(PAGE_W, PAGE_H)
+        const ctx = canvas.getContext('2d')
+        
+        // Fill white background
+        ctx.fillStyle = 'white'
+        ctx.fillRect(0, 0, PAGE_W, PAGE_H)
 
-      // Place tickets in grid
-      for (let row = 0; row < ROWS && ticketIndex < ticketImages.length; row++) {
-        for (let col = 0; col < COLS && ticketIndex < ticketImages.length; col++) {
+        // Place tickets on this page
+        const startIdx = page * TICKETS_PER_PAGE
+        const endIdx = Math.min(startIdx + TICKETS_PER_PAGE, ticketImages.length)
+
+        for (let i = startIdx; i < endIdx; i++) {
+          const ticketIdx = i - startIdx
+          const row = Math.floor(ticketIdx / COLS)
+          const col = ticketIdx % COLS
+          
           const x = col * (TICKET_W + MARGIN_X) + MARGIN_X
           const y = row * (TICKET_H + MARGIN_Y) + MARGIN_Y
 
-          try {
-            doc.image(ticketImages[ticketIndex], x, y, { 
-              width: TICKET_W, 
-              height: TICKET_H 
-            })
-            ticketIndex++
-          } catch (err) {
-            console.error('Error placing ticket in PDF:', err)
-          }
+          // Load and draw ticket image
+          const img = await import('canvas').then(({ loadImage }) => loadImage(ticketImages[i]))
+          ctx.drawImage(img, x, y, TICKET_W, TICKET_H)
         }
+
+        // Convert canvas to PNG buffer
+        const pageBuffer = canvas.toBuffer('image/png')
+        canvasPages.push(pageBuffer)
+      }
+
+      // Convert PNG pages to PDF using a simple approach
+      const jsPDF = await import('jspdf').then(m => m.jsPDF)
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: [PAGE_W, PAGE_H]
+      })
+
+      for (let i = 0; i < canvasPages.length; i++) {
+        if (i > 0) pdf.addPage()
+        
+        // Convert buffer to base64
+        const base64 = canvasPages[i].toString('base64')
+        pdf.addImage(`data:image/png;base64,${base64}`, 'PNG', 0, 0, PAGE_W, PAGE_H)
+      }
+
+      const pdfBuffer = Buffer.from(pdf.output('arraybuffer'))
+      
+      console.log('✅ PDF generated successfully using canvas approach, size:', pdfBuffer.length, 'bytes')
+
+      return new NextResponse(pdfBuffer, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="offline-tickets-${params.id}.pdf"`,
+          'Content-Length': pdfBuffer.length.toString(),
+        },
+      })
+
+    } catch (canvasError) {
+      console.error('Canvas PDF generation failed:', canvasError)
+      
+      // Fallback: Return images as ZIP file
+      console.log('📦 Falling back to ZIP file generation...')
+      
+      try {
+        const JSZip = await import('jszip').then(m => m.default)
+        const zip = new JSZip()
+        
+        // Add each ticket image to ZIP
+        for (let i = 0; i < ticketImages.length; i++) {
+          const participant = participants[i]
+          zip.file(`ticket-${participant.token}.png`, ticketImages[i])
+        }
+        
+        const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' })
+        
+        console.log('✅ ZIP file generated successfully, size:', zipBuffer.length, 'bytes')
+        
+        return new NextResponse(zipBuffer, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/zip',
+            'Content-Disposition': `attachment; filename="offline-tickets-${params.id}.zip"`,
+            'Content-Length': zipBuffer.length.toString(),
+          },
+        })
+        
+      } catch (zipError) {
+        console.error('ZIP generation also failed:', zipError)
+        return NextResponse.json({ 
+          error: 'Failed to generate both PDF and ZIP', 
+          pdfError: String(canvasError),
+          zipError: String(zipError)
+        }, { status: 500 })
       }
     }
 
-    doc.end()
-    await new Promise(resolve => doc.on('end', resolve))
-    
-    const pdfBuffer = Buffer.concat(pdfChunks)
-    console.log('✅ PDF generated successfully, size:', pdfBuffer.length, 'bytes')
-
-    return new NextResponse(pdfBuffer, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="offline-tickets-${params.id}.pdf"`,
-        'Content-Length': pdfBuffer.length.toString(),
-      },
-    })
   } catch (err) {
     console.error('Generate offline tickets error:', err, (err instanceof Error ? err.stack : ''))
     return NextResponse.json({ 

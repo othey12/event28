@@ -1,4 +1,3 @@
-import PDFDocument from 'pdfkit'
 import fs from 'fs'
 import path from 'path'
 
@@ -15,31 +14,52 @@ export async function generateCertificate({ participantName, eventName, particip
   if (!fs.existsSync(certDir)) {
     fs.mkdirSync(certDir, { recursive: true })
   }
+  
   // Nama file unik
   const filename = `cert_${participantId}_${eventId}.pdf`
   const filePath = path.join(certDir, filename)
   const publicPath = `/certificates/${filename}`
 
-  // Generate PDF
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 50 })
-    doc.font('Helvetica') // Always use built-in Helvetica
-    const stream = fs.createWriteStream(filePath)
-    doc.pipe(stream)
-    doc.fontSize(24).text('Certificate of Participation', { align: 'center' })
-    doc.moveDown(2)
-    doc.fontSize(18).text(`Awarded to:`, { align: 'center' })
-    doc.moveDown(1)
-    doc.fontSize(28).text(participantName, { align: 'center', underline: true })
-    doc.moveDown(2)
-    doc.fontSize(18).text(`For participating in:`, { align: 'center' })
-    doc.moveDown(1)
-    doc.fontSize(22).text(eventName, { align: 'center' })
-    doc.moveDown(4)
-    doc.fontSize(14).text(`Date: ${new Date().toLocaleDateString()}`, { align: 'center' })
-    doc.end()
-    stream.on('finish', () => resolve(publicPath))
-    stream.on('error', reject)
+  // Generate PDF using jsPDF instead of PDFKit to avoid font issues
+  return new Promise(async (resolve, reject) => {
+    try {
+      const { jsPDF } = await import('jspdf')
+      
+      const doc = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4'
+      })
+
+      // Set font to built-in font
+      doc.setFont('helvetica', 'normal')
+      
+      // Certificate content
+      doc.setFontSize(24)
+      doc.text('Certificate of Participation', 148, 50, { align: 'center' })
+      
+      doc.setFontSize(18)
+      doc.text('Awarded to:', 148, 80, { align: 'center' })
+      
+      doc.setFontSize(28)
+      doc.text(participantName, 148, 110, { align: 'center' })
+      
+      doc.setFontSize(18)
+      doc.text('For participating in:', 148, 140, { align: 'center' })
+      
+      doc.setFontSize(22)
+      doc.text(eventName, 148, 170, { align: 'center' })
+      
+      doc.setFontSize(14)
+      doc.text(`Date: ${new Date().toLocaleDateString()}`, 148, 200, { align: 'center' })
+
+      // Save PDF
+      const pdfBuffer = Buffer.from(doc.output('arraybuffer'))
+      fs.writeFileSync(filePath, pdfBuffer)
+      
+      resolve(publicPath)
+    } catch (error) {
+      reject(error)
+    }
   })
 }
-// PENTING: Untuk memastikan semua form input terlihat jelas, pastikan semua input di seluruh aplikasi Next.js menggunakan className yang mengatur text-black dan bg-white atau bg-gray-50. Jika ada form yang belum jelas, mohon info file/halamannya. 
